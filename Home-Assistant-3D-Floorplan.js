@@ -5257,6 +5257,16 @@ class HomeAssistant3DFloorplan extends HTMLElement {
           originalY: mesh.position.y,
           originalX: mesh.position.x,
           originalZ: mesh.position.z,
+          // For cover_position: original scale (position already captured above) plus
+          // the closed/open endpoints and eased current value driven by current_position
+          originalScaleX: mesh.scale.x,
+          originalScaleY: mesh.scale.y,
+          originalScaleZ: mesh.scale.z,
+          property: anim.property === "scale" ? "scale" : "position",
+          closedValue: Number(anim.closed_value ?? 0),
+          openValue: Number(anim.open_value ?? (anim.property === "scale" ? 1 : 0.5)),
+          transitionSpeed: Number(anim.transition_speed) || 2,
+          currentValue: null,
         };
       }).filter(Boolean);
       let animLastTime = performance.now();
@@ -5506,12 +5516,41 @@ class HomeAssistant3DFloorplan extends HTMLElement {
           animLastTime = animNow;
           let anyAnimActive = false;
           for (const anim of animatedObjects) {
+            const axis = anim.axis;
+            // cover_position is driven continuously by a numeric attribute (0-100),
+            // not the on/off stateOn gate the other animation types use below - a
+            // cover has no single "active" state, it's open/closed/opening/closing
+            // plus a position, so it must always be evaluated every frame.
+            if (anim.type === "cover_position") {
+              const coverState = this._hass?.states?.[anim.entity];
+              let pct = coverState?.attributes?.current_position;
+              if (pct === undefined || pct === null) {
+                // Fall back to binary open/closed for covers without position support
+                pct = coverState?.state === "open" ? 100 : 0;
+              }
+              pct = Math.max(0, Math.min(100, Number(pct) || 0));
+              const fraction = pct / 100;
+              const target = anim.closedValue + (anim.openValue - anim.closedValue) * fraction;
+              if (anim.currentValue === null) anim.currentValue = target; // snap on first frame
+              const rate = 1 - Math.exp(-anim.transitionSpeed * dt);
+              anim.currentValue += (target - anim.currentValue) * rate;
+              if (anim.property === "scale") {
+                if (axis === "x") anim.mesh.scale.x = anim.originalScaleX * anim.currentValue;
+                else if (axis === "z") anim.mesh.scale.z = anim.originalScaleZ * anim.currentValue;
+                else anim.mesh.scale.y = anim.originalScaleY * anim.currentValue;
+              } else {
+                if (axis === "x") anim.mesh.position.x = anim.originalX + anim.currentValue;
+                else if (axis === "z") anim.mesh.position.z = anim.originalZ + anim.currentValue;
+                else anim.mesh.position.y = anim.originalY + anim.currentValue;
+              }
+              if (Math.abs(target - anim.currentValue) > 0.0005) anyAnimActive = true;
+              continue;
+            }
             const entityState = this._hass?.states?.[anim.entity]?.state;
             const isActive = entityState === anim.stateOn;
             if (!isActive) continue;
             anyAnimActive = true;
             const speed = anim.speed;
-            const axis = anim.axis;
             if (anim.type === "rotate") {
               const angle = speed * 2 * Math.PI * dt;
               if (axis === "x") anim.mesh.rotation.x += angle;
@@ -11029,7 +11068,9 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
     if (!Array.isArray(animations) || !animations.length) {
       return `<div class="object-config-empty">No animations configured for this scope.</div>`;
     }
-    return animations.map((animation, index) => `
+    return animations.map((animation, index) => {
+      const isCoverPosition = (animation.type || "rotate") === "cover_position";
+      return `
       <article class="object-config-card">
         <header>
           <strong>Animation ${index + 1}${animation.object_name ? ` · ${this._escape(animation.object_name)}` : ""}</strong>
@@ -11038,14 +11079,21 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
         <div class="editor-grid">
           ${this._objectField("animation", index, "object_name", "GLB Object Name", animation.object_name, "CeilingFan")}
           ${this._objectField("animation", index, "entity", "Entity", animation.entity, "fan.living_room")}
-          ${this._objectSelect("animation", index, "type", "Animation Type", animation.type || "rotate", [["rotate", "Rotate"], ["oscillate", "Oscillate"], ["bob", "Bob"]])}
+          ${this._objectSelect("animation", index, "type", "Animation Type", animation.type || "rotate", [["rotate", "Rotate"], ["oscillate", "Oscillate"], ["bob", "Bob"], ["cover_position", "Position (Cover)"]])}
           ${this._objectSelect("animation", index, "axis", "Axis", animation.axis || "y", [["x", "X"], ["y", "Y"], ["z", "Z"]])}
-          ${this._objectField("animation", index, "speed", "Speed", animation.speed ?? 1, "1", "number", 'min="0" step="0.1"')}
+          ${isCoverPosition ? "" : `${this._objectField("animation", index, "speed", "Speed", animation.speed ?? 1, "1", "number", 'min="0" step="0.1"')}
           ${this._objectField("animation", index, "state_on", "Active State", animation.state_on || "on", "on")}
-          ${this._objectField("animation", index, "amplitude", "Amplitude", animation.amplitude ?? 0.5, "0.5", "number", 'min="0" step="0.1"')}
+          ${this._objectField("animation", index, "amplitude", "Amplitude", animation.amplitude ?? 0.5, "0.5", "number", 'min="0" step="0.1"')}`}
+          ${isCoverPosition ? `
+          ${this._objectSelect("animation", index, "property", "Drives", animation.property || "position", [["position", "Position offset"], ["scale", "Scale factor"]])}
+          ${this._objectField("animation", index, "closed_value", "Value when Closed (0%)", animation.closed_value ?? 0, "0", "number", 'step="0.01"')}
+          ${this._objectField("animation", index, "open_value", "Value when Open (100%)", animation.open_value ?? (animation.property === "scale" ? 1 : 0.5), "0.5", "number", 'step="0.01"')}
+          ${this._objectField("animation", index, "transition_speed", "Transition Speed", animation.transition_speed ?? 2, "2", "number", 'min="0.1" step="0.1"')}
+          ` : ""}
         </div>
       </article>
-    `).join("");
+    `;
+    }).join("");
   }
 
   _renderInteractiveObjectEditors() {

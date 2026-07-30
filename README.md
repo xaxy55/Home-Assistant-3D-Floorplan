@@ -419,24 +419,29 @@ floors:
 |-----------|----------|---------|-------------|
 | `object_name` | Yes | — | Name of the mesh/object in the GLB file (as named in Blender) |
 | `entity` | Yes | — | Home Assistant entity ID that controls the animation |
-| `type` | No | `rotate` | Animation type: `rotate`, `oscillate`, or `bob` |
+| `type` | No | `rotate` | Animation type: `rotate`, `oscillate`, `bob`, or `cover_position` |
 | `axis` | No | `y` | Rotation/movement axis: `x`, `y`, or `z` |
-| `speed` | No | `1.0` | Speed multiplier (rotations/cycles per second) |
-| `state_on` | No | `"on"` | Entity state value that triggers the animation |
-| `amplitude` | No | `0.5` | For `oscillate`: max rotation in radians. For `bob`: max displacement in model units |
+| `speed` | No | `1.0` | `rotate`/`oscillate`/`bob` only. Speed multiplier (rotations/cycles per second) |
+| `state_on` | No | `"on"` | `rotate`/`oscillate`/`bob` only. Entity state value that triggers the animation |
+| `amplitude` | No | `0.5` | `rotate`/`oscillate`/`bob` only. For `oscillate`: max rotation in radians. For `bob`: max displacement in model units |
+| `property` | No | `position` | `cover_position` only: `position` (offset along `axis`) or `scale` (scale factor along `axis`) |
+| `closed_value` | No | `0` | `cover_position` only: the `property` value when the cover's `current_position` is 0 (closed) |
+| `open_value` | No | `0.5` (`1` for `scale`) | `cover_position` only: the `property` value when `current_position` is 100 (open) |
+| `transition_speed` | No | `2` | `cover_position` only: how quickly the object eases toward a new position when the cover moves (higher = snappier) |
 
 ### Animation Types
 
 - **`rotate`** — Continuous rotation around the specified axis. Good for fans, turbines, pumps.
 - **`oscillate`** — Rocks back and forth around the axis. Good for valves, pendulums, indicators.
 - **`bob`** — Moves up and down (or along the specified axis). Good for floating indicators or pistons.
+- **`cover_position`** — Continuously driven by a `cover.*` entity's `current_position` attribute (0-100) rather than a binary on/off state, and eases smoothly toward a new value whenever the cover moves instead of looping. Good for blinds, shades, garage doors, awnings — anything with a real open/closed position. Interpolates linearly between `closed_value` (at position 0) and `open_value` (at position 100), applied either as a position offset or a scale factor along `axis` depending on `property`. For a roller blind modeled as fabric that shrinks as it rolls up, use `property: scale` with `closed_value: 1` and `open_value` near `0`. For a panel that slides down a track, use `property: position` with `closed_value: 0` and `open_value` set to the travel distance (negative if "open" moves it in the negative axis direction). Covers without position support (no `current_position` attribute) fall back to their binary `open`/`closed` state.
 
 ### Tips
 
 - The object name in the config must match the object name in your 3D file exactly (case-sensitive).
 - Set the object's origin point in Blender to the desired center of rotation before exporting.
 - For fans, place the origin at the center of the fan blades and use `type: rotate` with `axis: y`.
-- Animations only run when the entity state matches `state_on`. When the state changes to anything else, the object stops in its current position.
+- Animations only run when the entity state matches `state_on`. When the state changes to anything else, the object stops in its current position. (`cover_position` is the exception — it's driven continuously by `current_position`, not `state_on`.)
 - Multiple animations can target different objects in the same model.
 - **Geometry centering**: The card automatically centers each animated mesh's geometry around its local origin before animating. This ensures rotation happens in-place even for models exported from Sweet Home 3D or other tools that bake world-space vertex positions.
 
