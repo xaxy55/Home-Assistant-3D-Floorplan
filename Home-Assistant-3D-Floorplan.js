@@ -87,6 +87,9 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     this._modelCameraState = null;
     this._modelDefaultViews = {};
     this._modelViewAnimation = 0;
+    // Sims-style floor cutaway: null means "not yet initialized for this model" -
+    // resolved to the highest configured level (show everything) once the model loads.
+    this._visibleFloorLevel = null;
     this._modelLoadingUrl = "";
     this._modelLoadFailedUrl = "";
     this._threeModules = null;
@@ -1463,6 +1466,7 @@ class HomeAssistant3DFloorplan extends HTMLElement {
               <div class="model-zone-label-layer" data-zone-label-layer></div>
               <div class="model-zone-point-layer" data-zone-point-layer></div>
               ${this._modelCompassTemplate()}
+              ${this._floorLevelStepperTemplate()}
               ${isEditing ? `<div class="selected-marker-panel" data-selected-marker-panel>${this._selectedMarkerPanel()}</div>` : ""}
               <div class="model-status" data-model-status>${isEditing ? "Select an entity, then click the 3D model to place it." : "Loading 3D model..."}</div>
               <div class="version-badge">v${VERSION}</div>
@@ -2102,6 +2106,12 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         const action = event.currentTarget.dataset.modelDefaultView;
         if (action === "save") this._saveCurrentModelDefaultView();
         if (action === "clear") this._clearCurrentModelDefaultView();
+      });
+    });
+
+    root?.querySelectorAll?.("[data-floor-level-step]").forEach((element) => {
+      element.addEventListener("click", (event) => {
+        this._stepFloorLevel(Number(event.currentTarget.dataset.floorLevelStep));
       });
     });
   }
@@ -4671,6 +4681,34 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     `;
   }
 
+  _floorLevelStepperTemplate() {
+    const levels = this._modelViewer?.floorLevels || [];
+    if (levels.length < 2) return ""; // nothing to cut away with 0 or 1 configured levels
+    const current = this._visibleFloorLevel ?? levels[levels.length - 1];
+    const idx = levels.indexOf(current);
+    const objects = this._modelViewer?.floorLevelObjects || [];
+    const label = objects.find((fl) => fl.level === current)?.name || `Level ${current}`;
+    return `
+      <div class="floor-level-stepper" aria-label="Floor cutaway control">
+        <button type="button" data-floor-level-step="1" title="Show floor above" aria-label="Show floor above" ${idx >= levels.length - 1 ? "disabled" : ""}>&#9650;</button>
+        <span class="floor-level-label">${this._escape(label)}</span>
+        <button type="button" data-floor-level-step="-1" title="Show floor below" aria-label="Show floor below" ${idx <= 0 ? "disabled" : ""}>&#9660;</button>
+      </div>
+    `;
+  }
+
+  _stepFloorLevel(direction) {
+    const levels = this._modelViewer?.floorLevels || [];
+    if (!levels.length) return;
+    const current = this._visibleFloorLevel ?? levels[levels.length - 1];
+    const idx = levels.indexOf(current);
+    const nextIdx = Math.max(0, Math.min(levels.length - 1, (idx === -1 ? levels.length - 1 : idx) + direction));
+    this._visibleFloorLevel = levels[nextIdx];
+    this._modelViewer?.applyFloorLevelVisibility?.();
+    this._modelViewer?.requestRender?.();
+    this._render();
+  }
+
   _modelCompassTemplate() {
     const hasDefaultView = Boolean(this._modelDefaultViews?.[this._activeFloorId || "default"]);
     return `
@@ -5354,6 +5392,30 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         return changed;
       };
 
+      // --- Floor Level Cutaway (Sims-style) ---
+      // One combined model, tagged per top-level floor group with a numeric level.
+      // Selecting a level hides every group whose level is above it, from the same
+      // camera - unlike `floors:` (a separate model per floor with its own camera).
+      const floorLevelConfigs = activeFloorForAnim.floor_levels || this._config.floor_levels || [];
+      const floorLevelObjects = floorLevelConfigs.map((fl) => {
+        const mesh = model.getObjectByName(fl.object_name);
+        if (!mesh) {
+          console.warn(`home-assistant-3d-floorplan: floor_levels object "${fl.object_name}" not found in model`);
+          return null;
+        }
+        return { mesh, level: Number(fl.level) || 0, name: fl.name || `Level ${Number(fl.level) || 0}` };
+      }).filter(Boolean);
+      const floorLevels = [...new Set(floorLevelObjects.map((fl) => fl.level))].sort((a, b) => a - b);
+      if (floorLevels.length > 0 && (this._visibleFloorLevel === null || !floorLevels.includes(this._visibleFloorLevel))) {
+        this._visibleFloorLevel = floorLevels[floorLevels.length - 1]; // default: show everything
+      }
+      const applyFloorLevelVisibility = () => {
+        for (const fl of floorLevelObjects) {
+          fl.mesh.visible = this._visibleFloorLevel === null || fl.level <= this._visibleFloorLevel;
+        }
+      };
+      applyFloorLevelVisibility();
+
       this._fitCameraToObject(THREE, camera, controls, model);
       const configuredFocusDistance = Number(this._config.offline_focus_distance);
       const fittedCameraDistance = Math.max(1.2, camera.position.distanceTo(controls.target));
@@ -5658,6 +5720,9 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         interactiveObjectMap,
         interactiveNameMap,
         applyInteractiveStyles,
+        floorLevelObjects,
+        floorLevels,
+        applyFloorLevelVisibility,
         surfaceRaycaster: new THREE.Raycaster(),
         offlineFocusDistance,
         animationFrame: 0,
@@ -9844,6 +9909,58 @@ class HomeAssistant3DFloorplan extends HTMLElement {
           grid-column: 1 / -1;
         }
 
+        .floor-level-stepper {
+          position: absolute;
+          right: 12px;
+          bottom: 12px;
+          z-index: 7;
+          display: grid;
+          gap: 6px;
+          justify-items: center;
+          width: 64px;
+          pointer-events: none;
+        }
+
+        .floor-level-stepper button {
+          display: grid;
+          place-items: center;
+          width: 38px;
+          height: 30px;
+          border: 1px solid rgba(255, 255, 255, 0.34);
+          border-radius: 6px;
+          background: rgba(15, 23, 42, 0.78);
+          color: #fff;
+          cursor: pointer;
+          font-size: 13px;
+          line-height: 1;
+          padding: 0;
+          pointer-events: auto;
+          backdrop-filter: blur(5px);
+        }
+
+        .floor-level-stepper button:hover:not(:disabled) {
+          background: rgba(37, 99, 235, 0.9);
+        }
+
+        .floor-level-stepper button:disabled {
+          opacity: 0.35;
+          cursor: default;
+        }
+
+        .floor-level-label {
+          min-width: 64px;
+          padding: 3px 8px;
+          border: 1px solid rgba(255, 255, 255, 0.34);
+          border-radius: 999px;
+          background: rgba(15, 23, 42, 0.78);
+          color: #fff;
+          font-size: 11px;
+          font-weight: 800;
+          text-align: center;
+          white-space: nowrap;
+          backdrop-filter: blur(5px);
+        }
+
         .zone-lux-label {
           position: absolute;
           left: 0;
@@ -11022,6 +11139,18 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
         </section>
 
         <section>
+          <h3>Floor Levels (Cutaway)</h3>
+          ${this._renderObjectConfigToolbar("floor_level")}
+          <div class="editor-help">Tag each floor's top-level GLB group/empty with a numeric level. A stepper appears on the card
+            letting viewers hide floors above the selected level (Sims-style), from the same camera - unlike the separate
+            <code>floors:</code> config above, which swaps to an entirely different model per floor. Needs at least 2 levels
+            to show the stepper.</div>
+          <div class="object-config-list">
+            ${this._renderFloorLevelEditors()}
+          </div>
+        </section>
+
+        <section>
           <h3>Import Config YAML</h3>
           <div class="editor-help">Paste the full output of <strong>Copy YAML</strong> here. Applies markers, zones, animations, interactive objects, presets, and ambient darkness all at once.</div>
           <textarea data-full-config-yaml spellcheck="false" placeholder="Paste exported YAML here…"></textarea>
@@ -11044,7 +11173,7 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
         return `<option value="${value}" ${this._objectConfigScope === value ? "selected" : ""}>${this._escape(label)}</option>`;
       }),
     ].join("");
-    const label = kind === "animation" ? "Animation" : "Interactive object";
+    const label = kind === "animation" ? "Animation" : kind === "floor_level" ? "Floor Level" : "Interactive object";
     return `
       <div class="object-config-toolbar">
         <label>
@@ -11061,6 +11190,26 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
     if (!match) return config;
     const index = Number(match[1]);
     return Array.isArray(config.floors) && config.floors[index] ? config.floors[index] : config;
+  }
+
+  _renderFloorLevelEditors() {
+    const floorLevels = this._objectConfigTarget()?.floor_levels;
+    if (!Array.isArray(floorLevels) || !floorLevels.length) {
+      return `<div class="object-config-empty">No floor levels configured for this scope.</div>`;
+    }
+    return floorLevels.map((fl, index) => `
+      <article class="object-config-card">
+        <header>
+          <strong>Floor Level ${index + 1}${fl.object_name ? ` · ${this._escape(fl.object_name)}` : ""}</strong>
+          <button type="button" data-remove-object-item="floor_level" data-item-index="${index}">Remove</button>
+        </header>
+        <div class="editor-grid">
+          ${this._objectField("floor_level", index, "object_name", "GLB Object Name (floor group)", fl.object_name, "GroundFloor")}
+          ${this._objectField("floor_level", index, "name", "Display Name", fl.name, "Ground Floor")}
+          ${this._objectField("floor_level", index, "level", "Level (higher = hidden first)", fl.level ?? 0, "0", "number", 'step="1"')}
+        </div>
+      </article>
+    `).join("");
   }
 
   _renderAnimationEditors() {
@@ -11239,7 +11388,9 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
   }
 
   _objectConfigArrayKey(kind) {
-    return kind === "animation" ? "animations" : "interactive_objects";
+    if (kind === "animation") return "animations";
+    if (kind === "floor_level") return "floor_levels";
+    return "interactive_objects";
   }
 
   _addObjectConfigItem(kind) {
@@ -11247,9 +11398,14 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
     const target = this._objectConfigTarget(nextConfig);
     const key = this._objectConfigArrayKey(kind);
     if (!Array.isArray(target[key])) target[key] = [];
-    target[key].push(kind === "animation"
-      ? { object_name: "", entity: "", type: "rotate", axis: "y", speed: 1, state_on: "on", amplitude: 0.5 }
-      : { object_name: "", entity: "", tap_action: "toggle", hold_action: "more-info", state_styles: {} });
+    let defaultItem = { object_name: "", entity: "", tap_action: "toggle", hold_action: "more-info", state_styles: {} };
+    if (kind === "animation") {
+      defaultItem = { object_name: "", entity: "", type: "rotate", axis: "y", speed: 1, state_on: "on", amplitude: 0.5 };
+    } else if (kind === "floor_level") {
+      const existingLevels = (target[key] || []).map((fl) => Number(fl.level) || 0);
+      defaultItem = { object_name: "", name: "", level: existingLevels.length ? Math.max(...existingLevels) + 1 : 0 };
+    }
+    target[key].push(defaultItem);
     this._commitConfig(nextConfig);
     this._render();
   }

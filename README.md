@@ -315,6 +315,51 @@ floors:
     brightness_zones: []
 ```
 
+## Floor Levels (Cutaway)
+
+A Sims-style alternative to `floors:` above: instead of swapping to an entirely separate
+model per floor (its own camera, markers, zones), this works on **one combined model** and
+just hides floor groups above the level you select, from the same camera angle.
+
+```yaml
+floor_levels:
+  - object_name: "GroundFloor"
+    name: "Ground Floor"
+    level: 0
+  - object_name: "FirstFloor"
+    name: "First Floor"
+    level: 1
+  - object_name: "Roof"
+    name: "Roof"
+    level: 2
+```
+
+### Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `object_name` | Yes | — | Name of the top-level mesh/empty group in the GLB containing that floor's geometry (as named in Blender) |
+| `name` | No | `Level {n}` | Label shown in the card's floor stepper |
+| `level` | No | `0` | Numeric level - higher levels are hidden first as you step down |
+
+A stepper (▲/▼ + current floor label) appears in the bottom-right of the 3D viewport
+whenever at least 2 distinct levels are configured. Stepping down hides every group whose
+`level` is above the selected one; stepping back up reveals them again. Nothing is removed
+from the scene - groups are just toggled `visible = false`, so lights/markers attached
+inside a hidden floor also disappear until it's shown again.
+
+**Blender workflow**: parent each floor's objects under one Empty (or a single top-level
+mesh) per floor, then tag that top-level object with a floor level - see
+`blender-ha-floorplan/README.md` in the esphome repo for the add-on side of this.
+
+### Tips
+
+- Works with `floors:` too - each separate-model floor can have its own `floor_levels:` for
+  a sub-cutaway within that floor's model, though this is a fairly niche combination.
+- Requires at least 2 configured levels; with 0 or 1, the stepper doesn't render at all.
+- `level` values don't need to be contiguous (0, 1, 2, ...) - any set of distinct numbers
+  works, they're just sorted to build the stepper's step order.
+
 ## Offline / Three.js Setup
 
 ### What is and isn't local by default
