@@ -707,6 +707,10 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         ...(marker._configLightRectExplicit ? { _configLightRectExplicit: true } : {}),
         ...(marker._configLightPathExplicit ? { _configLightPathExplicit: true } : {}),
         colorThresholds: this._normalizeColorThresholds(marker.colorThresholds || marker.color_thresholds),
+        // Optional tie-in to floor_levels: - markers are positioned by a static x/y/z,
+        // not a named GLB node, so they aren't hidden by floor_levels' visibility
+        // toggling on their own; this field lets a marker opt in to the same cutaway.
+        floorLevel: marker.floorLevel ?? marker.floor_level ?? null,
         x: is3DMarker ? x : Math.max(0, Math.min(100, x)),
         y: is3DMarker ? y : Math.max(0, Math.min(100, y)),
         ...(is3DMarker ? { z } : {}),
@@ -4705,6 +4709,10 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     const nextIdx = Math.max(0, Math.min(levels.length - 1, (idx === -1 ? levels.length - 1 : idx) + direction));
     this._visibleFloorLevel = levels[nextIdx];
     this._modelViewer?.applyFloorLevelVisibility?.();
+    // Geometry visibility is handled above; markers are positioned by static x/y/z, not
+    // a scene-graph node, so their buttons need an explicit rebuild to appear/disappear
+    // for markers tagged with a floor_level above/at the newly selected one.
+    this._refresh3DMarkerOverlay();
     this._modelViewer?.requestRender?.();
     this._render();
   }
@@ -5806,6 +5814,9 @@ class HomeAssistant3DFloorplan extends HTMLElement {
 
   _modelMarkerRows() {
     const rowByKey = new Map(this._deviceRows().map((row) => [row.key, row]));
+    // null (no floor_levels configured, or not yet resolved) means "no cutaway active" -
+    // every marker shows regardless of floorLevel, same as before this feature existed.
+    const visibleLevel = this._visibleFloorLevel;
     return Object.entries(this._markers)
       .map(([key, marker]) => {
         const row = rowByKey.get(key);
@@ -5813,6 +5824,9 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         const y = Number(marker.y);
         const z = Number(marker.z);
         if (!row || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+        if (visibleLevel !== null && marker.floorLevel !== null && marker.floorLevel !== undefined && marker.floorLevel > visibleLevel) {
+          return null;
+        }
         return { row, marker: { ...marker, x, y, z } };
       })
       .filter(Boolean);

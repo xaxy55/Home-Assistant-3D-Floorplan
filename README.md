@@ -345,12 +345,35 @@ floor_levels:
 A stepper (▲/▼ + current floor label) appears in the bottom-right of the 3D viewport
 whenever at least 2 distinct levels are configured. Stepping down hides every group whose
 `level` is above the selected one; stepping back up reveals them again. Nothing is removed
-from the scene - groups are just toggled `visible = false`, so lights/markers attached
-inside a hidden floor also disappear until it's shown again.
+from the scene - groups are just toggled `visible = false`.
 
 **Blender workflow**: parent each floor's objects under one Empty (or a single top-level
 mesh) per floor, then tag that top-level object with a floor level - see
 `blender-ha-floorplan/README.md` in the esphome repo for the add-on side of this.
+
+### Markers don't hide automatically - opt them in with `floor_level`
+
+Unlike `animations:`/`interactive_objects:` (which reference a named GLB node and inherit
+its parent's visibility automatically), a marker is positioned by a static `x`/`y`/`z` in
+config, not tied to any scene-graph node - so a light or TV marker sitting inside a
+cut-away floor keeps showing its icon/label by default, even though the floor's geometry
+around it is hidden. Give a marker an explicit `floor_level` to opt it into the same
+cutaway:
+
+```yaml
+markers:
+  - entity: light.tv_backlight
+    name: "TV"
+    floor_level: 1
+    x: -4.0704
+    y: 4.2191
+    z: 12.5354
+```
+
+`floor_level` is compared the same way as `floor_levels:` groups: the marker hides once
+the visible level drops below it. Leave it unset (the default) and the marker always
+shows, regardless of the cutaway state. The Blender add-on sets this automatically when
+a marker object is parented under a tagged floor-level group - see its README.
 
 ### Tips
 
