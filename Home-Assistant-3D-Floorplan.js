@@ -5593,12 +5593,28 @@ class HomeAssistant3DFloorplan extends HTMLElement {
             // plus a position, so it must always be evaluated every frame.
             if (anim.type === "cover_position") {
               const coverState = this._hass?.states?.[anim.entity];
-              let pct = coverState?.attributes?.current_position;
-              if (pct === undefined || pct === null) {
-                // Fall back to binary open/closed for covers without position support
-                pct = coverState?.state === "open" ? 100 : 0;
+              const rawPct = coverState?.attributes?.current_position;
+              const numericPct = Number(rawPct);
+              // Many "dumb" RF covers (no real position feedback, e.g. transmit-only
+              // Somfy bridges) still expose a current_position attribute that's just a
+              // stale/optimistic default (often stuck at 0) and does not track state
+              // changes - so a boundary reading of exactly 0 or 100 is ambiguous and
+              // state (open/closed/opening/closing) is the more trustworthy source for
+              // it. Only a genuine in-between reading (1-99) can only come from a cover
+              // that actually measures position, so that's trusted outright.
+              let pct;
+              if (rawPct !== undefined && rawPct !== null && Number.isFinite(numericPct) && numericPct > 0 && numericPct < 100) {
+                pct = numericPct;
+              } else if (coverState?.state === "open") {
+                pct = 100;
+              } else if (coverState?.state === "closed") {
+                pct = 0;
+              } else if (Number.isFinite(numericPct)) {
+                pct = numericPct; // opening/closing/unknown state - fall back to the raw reading
+              } else {
+                pct = 0;
               }
-              pct = Math.max(0, Math.min(100, Number(pct) || 0));
+              pct = Math.max(0, Math.min(100, pct));
               const fraction = pct / 100;
               const target = anim.closedValue + (anim.openValue - anim.closedValue) * fraction;
               if (anim.currentValue === null) anim.currentValue = target; // snap on first frame
