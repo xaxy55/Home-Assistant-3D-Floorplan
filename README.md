@@ -339,13 +339,14 @@ floor_levels:
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `object_name` | Yes | — | Name of the top-level mesh/empty group in the GLB containing that floor's geometry (as named in Blender) |
-| `name` | No | `Level {n}` | Label shown in the card's floor stepper |
-| `level` | No | `0` | Numeric level - higher levels are hidden first as you step down |
+| `name` | No | `Floor {n}` | Button label shown on the card |
+| `level` | No | `0` | Numeric level - higher levels are hidden first |
 
-A stepper (▲/▼ + current floor label) appears in the bottom-right of the 3D viewport
-whenever at least 2 distinct levels are configured. Stepping down hides every group whose
-`level` is above the selected one; stepping back up reveals them again. Nothing is removed
-from the scene - groups are just toggled `visible = false`.
+A column of buttons - one per configured level, highest floor listed first, like a
+building directory - appears in the bottom-right of the 3D viewport whenever at least 2
+distinct levels are configured. Clicking a floor hides every group whose `level` is above
+it; clicking a higher floor reveals them again. Nothing is removed from the scene - groups
+are just toggled `visible = false`.
 
 **Blender workflow**: parent each floor's objects under one Empty (or a single top-level
 mesh) per floor, then tag that top-level object with a floor level - see
@@ -379,9 +380,9 @@ a marker object is parented under a tagged floor-level group - see its README.
 
 - Works with `floors:` too - each separate-model floor can have its own `floor_levels:` for
   a sub-cutaway within that floor's model, though this is a fairly niche combination.
-- Requires at least 2 configured levels; with 0 or 1, the stepper doesn't render at all.
+- Requires at least 2 configured levels; with 0 or 1, no buttons render at all.
 - `level` values don't need to be contiguous (0, 1, 2, ...) - any set of distinct numbers
-  works, they're just sorted to build the stepper's step order.
+  works, they're just sorted to build the button order (highest first).
 
 ## Offline / Three.js Setup
 

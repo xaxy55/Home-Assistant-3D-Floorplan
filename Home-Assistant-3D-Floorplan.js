@@ -2113,9 +2113,9 @@ class HomeAssistant3DFloorplan extends HTMLElement {
       });
     });
 
-    root?.querySelectorAll?.("[data-floor-level-step]").forEach((element) => {
+    root?.querySelectorAll?.("[data-floor-level-set]").forEach((element) => {
       element.addEventListener("click", (event) => {
-        this._stepFloorLevel(Number(event.currentTarget.dataset.floorLevelStep));
+        this._setFloorLevel(Number(event.currentTarget.dataset.floorLevelSet));
       });
     });
   }
@@ -4689,25 +4689,25 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     const levels = this._modelViewer?.floorLevels || [];
     if (levels.length < 2) return ""; // nothing to cut away with 0 or 1 configured levels
     const current = this._visibleFloorLevel ?? levels[levels.length - 1];
-    const idx = levels.indexOf(current);
     const objects = this._modelViewer?.floorLevelObjects || [];
-    const label = objects.find((fl) => fl.level === current)?.name || `Level ${current}`;
+    // Listed highest floor first, like a building directory/elevator panel.
+    const orderedLevels = [...levels].sort((a, b) => b - a);
+    const buttons = orderedLevels.map((level) => {
+      const label = objects.find((fl) => fl.level === level)?.name || `Floor ${level}`;
+      const isActive = level === current;
+      return `<button type="button" data-floor-level-set="${level}" class="${isActive ? "active" : ""}" title="Show ${this._escape(label)}" aria-label="Show ${this._escape(label)}" aria-pressed="${isActive}">${this._escape(label)}</button>`;
+    }).join("");
     return `
-      <div class="floor-level-stepper" aria-label="Floor cutaway control">
-        <button type="button" data-floor-level-step="1" title="Show floor above" aria-label="Show floor above" ${idx >= levels.length - 1 ? "disabled" : ""}>&#9650;</button>
-        <span class="floor-level-label">${this._escape(label)}</span>
-        <button type="button" data-floor-level-step="-1" title="Show floor below" aria-label="Show floor below" ${idx <= 0 ? "disabled" : ""}>&#9660;</button>
+      <div class="floor-level-selector" aria-label="Floor cutaway control">
+        ${buttons}
       </div>
     `;
   }
 
-  _stepFloorLevel(direction) {
+  _setFloorLevel(level) {
     const levels = this._modelViewer?.floorLevels || [];
-    if (!levels.length) return;
-    const current = this._visibleFloorLevel ?? levels[levels.length - 1];
-    const idx = levels.indexOf(current);
-    const nextIdx = Math.max(0, Math.min(levels.length - 1, (idx === -1 ? levels.length - 1 : idx) + direction));
-    this._visibleFloorLevel = levels[nextIdx];
+    if (!levels.includes(level)) return;
+    this._visibleFloorLevel = level;
     this._modelViewer?.applyFloorLevelVisibility?.();
     // Geometry visibility is handled above; markers are positioned by static x/y/z, not
     // a scene-graph node, so their buttons need an explicit rebuild to appear/disappear
@@ -9923,56 +9923,43 @@ class HomeAssistant3DFloorplan extends HTMLElement {
           grid-column: 1 / -1;
         }
 
-        .floor-level-stepper {
+        .floor-level-selector {
           position: absolute;
           right: 12px;
           bottom: 12px;
           z-index: 7;
           display: grid;
           gap: 6px;
-          justify-items: center;
-          width: 64px;
+          justify-items: stretch;
           pointer-events: none;
         }
 
-        .floor-level-stepper button {
+        .floor-level-selector button {
           display: grid;
           place-items: center;
-          width: 38px;
+          min-width: 76px;
           height: 30px;
-          border: 1px solid rgba(255, 255, 255, 0.34);
-          border-radius: 6px;
-          background: rgba(15, 23, 42, 0.78);
-          color: #fff;
-          cursor: pointer;
-          font-size: 13px;
-          line-height: 1;
-          padding: 0;
-          pointer-events: auto;
-          backdrop-filter: blur(5px);
-        }
-
-        .floor-level-stepper button:hover:not(:disabled) {
-          background: rgba(37, 99, 235, 0.9);
-        }
-
-        .floor-level-stepper button:disabled {
-          opacity: 0.35;
-          cursor: default;
-        }
-
-        .floor-level-label {
-          min-width: 64px;
-          padding: 3px 8px;
+          padding: 0 12px;
           border: 1px solid rgba(255, 255, 255, 0.34);
           border-radius: 999px;
           background: rgba(15, 23, 42, 0.78);
           color: #fff;
+          cursor: pointer;
           font-size: 11px;
           font-weight: 800;
-          text-align: center;
+          line-height: 1;
           white-space: nowrap;
+          pointer-events: auto;
           backdrop-filter: blur(5px);
+        }
+
+        .floor-level-selector button:hover {
+          background: rgba(37, 99, 235, 0.9);
+        }
+
+        .floor-level-selector button.active {
+          background: var(--primary-color, #3b82f6);
+          border-color: rgba(255, 255, 255, 0.6);
         }
 
         .zone-lux-label {
@@ -11155,10 +11142,10 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
         <section>
           <h3>Floor Levels (Cutaway)</h3>
           ${this._renderObjectConfigToolbar("floor_level")}
-          <div class="editor-help">Tag each floor's top-level GLB group/empty with a numeric level. A stepper appears on the card
-            letting viewers hide floors above the selected level (Sims-style), from the same camera - unlike the separate
-            <code>floors:</code> config above, which swaps to an entirely different model per floor. Needs at least 2 levels
-            to show the stepper.</div>
+          <div class="editor-help">Tag each floor's top-level GLB group/empty with a numeric level. A row of floor buttons
+            appears on the card letting viewers hide floors above the selected one (Sims-style), from the same camera -
+            unlike the separate <code>floors:</code> config above, which swaps to an entirely different model per floor.
+            Needs at least 2 levels to show the buttons.</div>
           <div class="object-config-list">
             ${this._renderFloorLevelEditors()}
           </div>
