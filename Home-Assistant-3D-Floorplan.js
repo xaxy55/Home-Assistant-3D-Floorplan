@@ -1470,7 +1470,7 @@ class HomeAssistant3DFloorplan extends HTMLElement {
               <div class="model-zone-label-layer" data-zone-label-layer></div>
               <div class="model-zone-point-layer" data-zone-point-layer></div>
               ${this._modelCompassTemplate()}
-              ${this._floorLevelStepperTemplate()}
+              <div data-floor-level-selector>${this._floorLevelStepperTemplate()}</div>
               ${isEditing ? `<div class="selected-marker-panel" data-selected-marker-panel>${this._selectedMarkerPanel()}</div>` : ""}
               <div class="model-status" data-model-status>${isEditing ? "Select an entity, then click the 3D model to place it." : "Loading 3D model..."}</div>
               <div class="version-badge">v${VERSION}</div>
@@ -4714,7 +4714,20 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     // for markers tagged with a floor_level above/at the newly selected one.
     this._refresh3DMarkerOverlay();
     this._modelViewer?.requestRender?.();
-    this._render();
+    // Only patch the button's own active/inactive state here - NOT this._render(), which
+    // disposes and rebuilds the whole model viewer (re-fitting the camera to whatever's
+    // newly visible in the process). That turned floor switching into an unwanted camera
+    // jump/zoom on top of the intended hide/show cutaway.
+    this._refreshFloorLevelSelector();
+  }
+
+  _refreshFloorLevelSelector() {
+    const container = this.shadowRoot?.querySelector("[data-floor-level-selector]");
+    if (!container) return;
+    container.innerHTML = this._floorLevelStepperTemplate();
+    // innerHTML replaces the button nodes, so their click listeners are gone - rebind,
+    // scoped to this container only so compass/save-view buttons don't get bound twice.
+    this._bindModelViewControls(container);
   }
 
   _modelCompassTemplate() {
@@ -5757,6 +5770,10 @@ class HomeAssistant3DFloorplan extends HTMLElement {
       };
       this._applyZoneDrawingState();
       this._refresh3DZoneOverlay();
+      // floorLevels is only known once the model has actually loaded, but the outer
+      // template rendered the (empty) floor-level-selector placeholder before that -
+      // patch it in now that the data is ready, without disposing/rebuilding the viewer.
+      this._refreshFloorLevelSelector();
       animate();
       if (this._pendingMarkerFocus) {
         const pendingFocus = this._pendingMarkerFocus;
