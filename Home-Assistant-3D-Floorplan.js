@@ -710,7 +710,13 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         // Optional tie-in to floor_levels: - markers are positioned by a static x/y/z,
         // not a named GLB node, so they aren't hidden by floor_levels' visibility
         // toggling on their own; this field lets a marker opt in to the same cutaway.
-        floorLevel: marker.floorLevel ?? marker.floor_level ?? null,
+        // Only emitted when actually specified (not defaulted to null): _mergeMarkerMaps
+        // spreads a saved/cached marker over the config one, and a browser-cached marker
+        // saved before this field existed has no opinion on it - defaulting to null here
+        // would make that absence spread over and clobber a real configured floorLevel.
+        ...((marker.floorLevel ?? marker.floor_level) !== undefined && (marker.floorLevel ?? marker.floor_level) !== null
+          ? { floorLevel: marker.floorLevel ?? marker.floor_level }
+          : {}),
         x: is3DMarker ? x : Math.max(0, Math.min(100, x)),
         y: is3DMarker ? y : Math.max(0, Math.min(100, y)),
         ...(is3DMarker ? { z } : {}),
