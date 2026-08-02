@@ -8370,7 +8370,12 @@ class HomeAssistant3DFloorplan extends HTMLElement {
   }
 
   _cssEscape(value) {
-    return window.CSS?.escape ? CSS.escape(String(value)) : String(value).replace(/"/g, '\\"');
+    if (window.CSS?.escape) return CSS.escape(String(value));
+    // Backslash must be escaped too, and before the quote - escaping only the quote
+    // lets a value containing a literal `\"` sequence smuggle an unescaped closing
+    // quote through (e.g. value `\"` -> `\\"` -> a real `\` followed by a real `"`),
+    // breaking out of the attribute-selector string this feeds into.
+    return String(value).replace(/[\\"]/g, (match) => `\\${match}`);
   }
 
   _styles() {
@@ -11880,6 +11885,10 @@ class HomeAssistant3DFloorplanEditor extends HTMLElement {
 
   _setConfigPath(config, path, value) {
     const parts = path.split(".");
+    // Refuse to walk into the prototype chain - a path like "__proto__.x" or
+    // "constructor.prototype.x" would otherwise let this pollute Object.prototype
+    // for every object in the page, not just this card's config.
+    if (parts.some((part) => part === "__proto__" || part === "constructor" || part === "prototype")) return;
     let target = config;
     for (let index = 0; index < parts.length - 1; index += 1) {
       const part = parts[index];
