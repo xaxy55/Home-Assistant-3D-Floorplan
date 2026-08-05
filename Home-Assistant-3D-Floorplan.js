@@ -90,6 +90,9 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     // Sims-style floor cutaway: null means "not yet initialized for this model" -
     // resolved to the highest configured level (show everything) once the model loads.
     this._visibleFloorLevel = null;
+    // Section-plane cutaway (cut_levels:). null = no cut, i.e. show the whole model;
+    // otherwise the index into the configured cut level list.
+    this._activeCutLevelIndex = null;
     this._modelLoadingUrl = "";
     this._modelLoadFailedUrl = "";
     this._threeModules = null;
@@ -1477,6 +1480,7 @@ class HomeAssistant3DFloorplan extends HTMLElement {
               <div class="model-zone-point-layer" data-zone-point-layer></div>
               ${this._modelCompassTemplate()}
               <div data-floor-level-selector>${this._floorLevelStepperTemplate()}</div>
+              <div data-cut-level-selector>${this._cutLevelSelectorTemplate()}</div>
               ${isEditing ? `<div class="selected-marker-panel" data-selected-marker-panel>${this._selectedMarkerPanel()}</div>` : ""}
               <div class="model-status" data-model-status>${isEditing ? "Select an entity, then click the 3D model to place it." : "Loading 3D model..."}</div>
               <div class="version-badge">v${VERSION}</div>
@@ -2122,6 +2126,12 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     root?.querySelectorAll?.("[data-floor-level-set]").forEach((element) => {
       element.addEventListener("click", (event) => {
         this._setFloorLevel(Number(event.currentTarget.dataset.floorLevelSet));
+      });
+    });
+
+    root?.querySelectorAll?.("[data-cut-level-set]").forEach((element) => {
+      element.addEventListener("click", (event) => {
+        this._setCutLevel(event.currentTarget.dataset.cutLevelSet);
       });
     });
   }
@@ -4692,6 +4702,10 @@ class HomeAssistant3DFloorplan extends HTMLElement {
   }
 
   _floorLevelStepperTemplate() {
+    // cut_levels: supersedes floor_levels: - it does the same job by slicing rather
+    // than hiding whole groups, and both selectors occupy the same corner. When cut
+    // levels are configured this control stands down rather than stacking on top.
+    if (this._cutLevels().length) return "";
     const levels = this._modelViewer?.floorLevels || [];
     if (levels.length < 2) return ""; // nothing to cut away with 0 or 1 configured levels
     const current = this._visibleFloorLevel ?? levels[levels.length - 1];
@@ -4725,6 +4739,66 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     // newly visible in the process). That turned floor switching into an unwanted camera
     // jump/zoom on top of the intended hide/show cutaway.
     this._refreshFloorLevelSelector();
+  }
+
+  _cutLevels() {
+    const raw = this._activeFloor()?.cut_levels || this._config.cut_levels || [];
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((entry, index) => {
+        const height = Number(entry?.height ?? entry?.cut_height);
+        if (!Number.isFinite(height)) return null;
+        return { name: entry?.name || `Level ${index + 1}`, height };
+      })
+      .filter(Boolean);
+  }
+
+  _activeCutHeight() {
+    const levels = this._cutLevels();
+    const index = this._activeCutLevelIndex;
+    if (index === null || index === undefined) return null;
+    return levels[index] ? levels[index].height : null;
+  }
+
+  _cutLevelSelectorTemplate() {
+    const levels = this._cutLevels();
+    if (!levels.length) return "";
+    const active = this._activeCutLevelIndex;
+    // "All" first, then the configured levels in order - authoring order is the
+    // building order, so the config controls how the stack reads top-to-bottom.
+    const buttons = [
+      `<button type="button" data-cut-level-set="all" class="${active === null ? "active" : ""}" title="Show the whole model" aria-pressed="${active === null}">All</button>`,
+      ...levels.map((level, index) => {
+        const isActive = index === active;
+        const label = this._escape(level.name);
+        return `<button type="button" data-cut-level-set="${index}" class="${isActive ? "active" : ""}" title="Cut at ${level.height}" aria-label="Cut at ${label}" aria-pressed="${isActive}">${label}</button>`;
+      }),
+    ].join("");
+    return `
+      <div class="cut-level-selector" aria-label="Floor cutaway control">
+        ${buttons}
+      </div>
+    `;
+  }
+
+  _setCutLevel(value) {
+    const levels = this._cutLevels();
+    const index = value === "all" ? null : Number(value);
+    if (index !== null && (!Number.isInteger(index) || !levels[index])) return;
+    this._activeCutLevelIndex = index;
+    this._modelViewer?.applyCutLevel?.();
+    // Markers sit above the cut plane as DOM overlays, so clipping doesn't touch them -
+    // they need the same height test applied when rebuilding the overlay.
+    this._refresh3DMarkerOverlay();
+    this._modelViewer?.requestRender?.();
+    this._refreshCutLevelSelector();
+  }
+
+  _refreshCutLevelSelector() {
+    const container = this.shadowRoot?.querySelector("[data-cut-level-selector]");
+    if (!container) return;
+    container.innerHTML = this._cutLevelSelectorTemplate();
+    this._bindModelViewControls(container);
   }
 
   _refreshFloorLevelSelector() {
@@ -5443,6 +5517,25 @@ class HomeAssistant3DFloorplan extends HTMLElement {
       };
       applyFloorLevelVisibility();
 
+      // --- Cut Levels (section-plane cutaway) ---
+      // Unlike floor_levels: (which hides whole named groups), this slices the model
+      // at a height, so geometry spanning storeys - full-height walls, blinds, tall
+      // cabinets - is cut rather than being all-or-nothing. Heights are in the card's
+      // Y-up model space, i.e. straight from Blender's Z.
+      const cutLevels = this._cutLevels();
+      const cutPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+      const applyCutLevel = () => {
+        const height = this._activeCutHeight();
+        if (height === null) {
+          renderer.clippingPlanes = [];
+          return;
+        }
+        // normal (0,-1,0) with constant = height keeps points where y <= height.
+        cutPlane.constant = height;
+        renderer.clippingPlanes = [cutPlane];
+      };
+      applyCutLevel();
+
       this._fitCameraToObject(THREE, camera, controls, model);
       const configuredFocusDistance = Number(this._config.offline_focus_distance);
       const fittedCameraDistance = Math.max(1.2, camera.position.distanceTo(controls.target));
@@ -5766,6 +5859,8 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         floorLevelObjects,
         floorLevels,
         applyFloorLevelVisibility,
+        cutLevels,
+        applyCutLevel,
         surfaceRaycaster: new THREE.Raycaster(),
         offlineFocusDistance,
         animationFrame: 0,
@@ -5780,6 +5875,7 @@ class HomeAssistant3DFloorplan extends HTMLElement {
       // template rendered the (empty) floor-level-selector placeholder before that -
       // patch it in now that the data is ready, without disposing/rebuilding the viewer.
       this._refreshFloorLevelSelector();
+      this._refreshCutLevelSelector();
       animate();
       if (this._pendingMarkerFocus) {
         const pendingFocus = this._pendingMarkerFocus;
@@ -5856,6 +5952,10 @@ class HomeAssistant3DFloorplan extends HTMLElement {
     // null (no floor_levels configured, or not yet resolved) means "no cutaway active" -
     // every marker shows regardless of floorLevel, same as before this feature existed.
     const visibleLevel = this._visibleFloorLevel;
+    // Markers are DOM overlays, not scene geometry, so the renderer's clipping plane
+    // doesn't touch them - apply the same height test by hand or they'd hover over
+    // the space where the cut-away storey used to be.
+    const cutHeight = this._activeCutHeight();
     return Object.entries(this._markers)
       .map(([key, marker]) => {
         const row = rowByKey.get(key);
@@ -5866,6 +5966,7 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         if (visibleLevel !== null && marker.floorLevel !== null && marker.floorLevel !== undefined && marker.floorLevel > visibleLevel) {
           return null;
         }
+        if (cutHeight !== null && y > cutHeight) return null;
         return { row, marker: { ...marker, x, y, z } };
       })
       .filter(Boolean);
@@ -10002,6 +10103,47 @@ class HomeAssistant3DFloorplan extends HTMLElement {
         }
 
         .floor-level-selector button.active {
+          background: var(--primary-color, #3b82f6);
+          border-color: rgba(255, 255, 255, 0.6);
+        }
+
+        /* Sits above the floor-level selector in the same bottom-right corner; the two
+           are independent controls and normally only one is configured. */
+        .cut-level-selector {
+          position: absolute;
+          right: 12px;
+          bottom: 12px;
+          z-index: 7;
+          display: grid;
+          gap: 6px;
+          justify-items: stretch;
+          pointer-events: none;
+        }
+
+        .cut-level-selector button {
+          display: grid;
+          place-items: center;
+          min-width: 76px;
+          height: 30px;
+          padding: 0 12px;
+          border: 1px solid rgba(255, 255, 255, 0.34);
+          border-radius: 999px;
+          background: rgba(15, 23, 42, 0.78);
+          color: #fff;
+          cursor: pointer;
+          font-size: 11px;
+          font-weight: 800;
+          line-height: 1;
+          white-space: nowrap;
+          pointer-events: auto;
+          backdrop-filter: blur(5px);
+        }
+
+        .cut-level-selector button:hover {
+          background: rgba(37, 99, 235, 0.9);
+        }
+
+        .cut-level-selector button.active {
           background: var(--primary-color, #3b82f6);
           border-color: rgba(255, 255, 255, 0.6);
         }
